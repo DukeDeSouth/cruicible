@@ -42,3 +42,7 @@ Thumbs.db
 
 # Runtime data
 data/
+
+# ADK session data
+*.db
+.adk/
