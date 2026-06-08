@@ -22,8 +22,12 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your GOOGLE_API_KEY and PHOENIX_API_KEY
 
-# Run the agent
+# Run in CLI mode
 adk run cruicible
+
+# Or launch the Web UI (recommended)
+adk web .
+# Open http://localhost:8080 in your browser
 ```
 
 ## How it works
@@ -52,7 +56,7 @@ User → ADK Agent (Gemini 2.5 Flash)
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.10+
 - Gemini API key ([AI Studio](https://aistudio.google.com/))
 - Phoenix Cloud account ([app.phoenix.arize.com](https://app.phoenix.arize.com/))
 
