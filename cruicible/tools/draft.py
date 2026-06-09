@@ -2,6 +2,11 @@
 
 import re
 from cruicible.llm import generate
+from cruicible.harness import harness_prompt_block
+
+
+MAX_SEARCH_INPUT = 3000
+MAX_CONTENT_OUTPUT = 1500
 
 
 def draft_section(step_id: int, action: str, search_results: str) -> dict:
@@ -15,6 +20,10 @@ def draft_section(step_id: int, action: str, search_results: str) -> dict:
     Returns:
         A dict with 'step_id', 'content' (markdown), and 'sources' (list of URLs).
     """
+    if len(search_results) > MAX_SEARCH_INPUT:
+        search_results = search_results[:MAX_SEARCH_INPUT] + "\n[...truncated]"
+
+    learned = harness_prompt_block()
     prompt = f"""You are a research writer producing a section for an analytical brief.
 
 Task: {action}
@@ -34,6 +43,8 @@ STRICT REQUIREMENTS — your section will be evaluated against these:
 
 If the search results don't contain enough information, say so explicitly rather than fabricating.
 
+{learned}
+
 Respond with the section content in markdown."""
 
     content = generate(prompt)
@@ -46,6 +57,9 @@ Respond with the section content in markdown."""
     source_tags = re.findall(r'\(Source:\s*([^\)]+)\)', content)
     for tag in source_tags:
         sources.append(tag.strip())
+
+    if len(content) > MAX_CONTENT_OUTPUT:
+        content = content[:MAX_CONTENT_OUTPUT] + "\n[...section truncated for context efficiency]"
 
     return {
         "step_id": step_id,

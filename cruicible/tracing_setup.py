@@ -37,3 +37,12 @@ def setup_tracing() -> None:
 
     _initialized = True
     logger.info("Tracing configured → Phoenix Cloud")
+
+
+def get_current_span_id() -> str | None:
+    """Return the current OpenTelemetry span ID as a hex string, or None."""
+    from opentelemetry import trace
+    ctx = trace.get_current_span().get_span_context()
+    if ctx and ctx.span_id:
+        return format(ctx.span_id, "016x")
+    return None

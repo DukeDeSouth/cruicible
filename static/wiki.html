@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CruicibleWiki — Research Knowledge Base</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen" x-data="wiki()">
+
+  <header class="border-b border-slate-700 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <a href="/" class="flex items-center gap-3 hover:opacity-80 transition">
+        <div class="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+          <span class="text-emerald-400 font-bold text-sm">C</span>
+        </div>
+        <h1 class="text-lg font-semibold text-slate-100">CruicibleWiki</h1>
+      </a>
+      <span class="text-xs text-slate-500 bg-slate-800 px-2 py-0.5 rounded">Knowledge Base</span>
+    </div>
+    <div class="text-xs text-slate-500">
+      <span x-text="entries.length + ' entries'"></span>
+    </div>
+  </header>
+
+  <div class="max-w-4xl mx-auto p-6">
+
+    <template x-if="entries.length === 0">
+      <div class="text-center py-20">
+        <p class="text-slate-500 text-lg mb-2">No research briefs yet</p>
+        <p class="text-slate-600 text-sm">Approved research briefs will appear here automatically.</p>
+        <a href="/" class="inline-block mt-4 text-emerald-400 hover:text-emerald-300 text-sm transition">
+          Start researching &rarr;
+        </a>
+      </div>
+    </template>
+
+    <div class="space-y-4">
+      <template x-for="entry in entries" :key="entry.id">
+        <div class="fade-in bg-slate-800/50 border border-slate-700 rounded-xl overflow-hidden">
+          <div class="px-5 py-4 cursor-pointer hover:bg-slate-800/80 transition"
+               @click="entry._open = !entry._open">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0 flex-1">
+                <h2 class="text-sm font-medium text-slate-200" x-text="entry.query"></h2>
+                <p class="text-xs text-slate-500 mt-1" x-text="formatDate(entry.created_at)"></p>
+              </div>
+              <span class="text-slate-600 text-xs shrink-0 mt-1 transition-transform"
+                    :class="entry._open ? 'rotate-90' : ''">&rsaquo;</span>
+            </div>
+          </div>
+          <div x-show="entry._open" x-cloak class="border-t border-slate-700 px-5 py-4">
+            <div class="text-sm text-slate-300 prose prose-invert prose-sm max-w-none leading-relaxed"
+                 x-html="renderBrief(entry.brief)"></div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <script>
+    function wiki() {
+      return {
+        entries: [],
+
+        async init() {
+          try {
+            const res = await fetch('/api/wiki');
+            const data = await res.json();
+            this.entries = data.map(e => ({ ...e, _open: false }));
+          } catch (e) {
+            console.warn('Wiki load failed:', e);
+          }
+        },
+
+        formatDate(iso) {
+          if (!iso) return '';
+          const d = new Date(iso);
+          return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        },
+
+        renderBrief(text) {
+          if (!text) return '';
+          return text
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code class="bg-slate-700 px-1 rounded text-xs">$1</code>')
+            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" class="text-emerald-400 underline">$1</a>')
+            .replace(/\n/g, '<br>');
+        },
+      };
+    }
+  </script>
+</body>
+</html>

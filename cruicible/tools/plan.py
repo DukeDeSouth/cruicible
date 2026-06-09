@@ -13,8 +13,9 @@ def plan_research(query: str) -> dict:
     Returns:
         A dict with 'steps' (list of step objects) and 'query' echo.
     """
-    prompt = f"""You are a research planner. Given a query, produce a JSON array of 3-5 steps.
+    prompt = f"""You are a research planner. Given a query, produce a JSON array of exactly 2 steps.
 Each step has: "id" (int), "action" (string), "search_query" (string for Google search).
+Step 1 should gather core facts. Step 2 should add depth or a second angle.
 
 Query: {query}
 
@@ -26,11 +27,12 @@ Respond ONLY with valid JSON array, no markdown fences."""
 
     try:
         steps = json.loads(text)
+        if len(steps) > 2:
+            steps = steps[:2]
     except json.JSONDecodeError:
         steps = [
-            {"id": 1, "action": "Search for main topic", "search_query": query},
-            {"id": 2, "action": "Find supporting data", "search_query": f"{query} statistics data"},
-            {"id": 3, "action": "Find expert opinions", "search_query": f"{query} expert analysis"},
+            {"id": 1, "action": f"Research core facts about: {query}", "search_query": query},
+            {"id": 2, "action": f"Find additional context", "search_query": f"{query} analysis details"},
         ]
 
     return {"steps": steps, "query": query}

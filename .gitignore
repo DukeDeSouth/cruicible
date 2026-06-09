@@ -43,6 +43,9 @@ Thumbs.db
 # Runtime data
 data/
 
+# Internal M7 cycle artifacts (not for public repo)
+m7-cycles/
+
 # ADK session data
 *.db
 .adk/

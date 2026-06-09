@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cruicible — Self-Evaluating Research Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .pulse { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    pre { white-space: pre-wrap; word-wrap: break-word; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    [x-cloak] { display: none !important; }
+    @keyframes calibrationSlam {
+      0% { transform: scale(0.3) rotate(-5deg); opacity: 0; }
+      50% { transform: scale(1.08) rotate(1deg); opacity: 1; }
+      70% { transform: scale(0.97) rotate(-0.5deg); }
+      100% { transform: scale(1) rotate(0deg); opacity: 1; }
+    }
+    @keyframes redPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+      50% { box-shadow: 0 0 20px 4px rgba(239, 68, 68, 0.3); }
+    }
+    .calibration-slam { animation: calibrationSlam 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+    .calibration-glow { animation: redPulse 2s ease-in-out 0.5s 3; }
+  </style>
+</head>
+<body class="min-h-screen" x-data="cruicible()">
+
+  <!-- Header -->
+  <header class="border-b border-slate-700 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+        <span class="text-emerald-400 font-bold text-sm">C</span>
+      </div>
+      <h1 class="text-lg font-semibold text-slate-100">Cruicible</h1>
+      <span class="text-xs text-slate-500 bg-slate-800 px-2 py-0.5 rounded">PAER Loop</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="text-xs text-slate-500">
+        <span x-show="status === 'idle'">Ready</span>
+        <span x-show="status === 'running'" class="text-amber-400 pulse">Running...</span>
+        <span x-show="status === 'pending_review'" class="text-amber-400">Awaiting Review</span>
+        <span x-show="status === 'complete'" class="text-emerald-400">Complete</span>
+        <span x-show="status === 'rejected'" class="text-red-400">Rejected</span>
+        <span x-show="status === 'error'" class="text-red-400">Error</span>
+      </div>
+      <button @click="showSettings = true"
+              class="text-xs px-3 py-1.5 rounded-lg transition"
+              :class="hasKeys ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-amber-600/20 border border-amber-600/50 text-amber-300 hover:bg-amber-600/30'">
+        <span x-show="hasKeys">Settings</span>
+        <span x-show="!hasKeys">Set API Keys</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Settings Modal -->
+  <div x-show="showSettings" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+       @keydown.escape.window="showSettings = false">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md mx-4 p-6 shadow-2xl"
+         @click.outside="showSettings = false">
+      <h2 class="text-lg font-semibold text-slate-100 mb-1">API Keys</h2>
+      <p class="text-xs text-slate-500 mb-4">Stored locally in your browser. Never sent to our servers — only to Google and Arize APIs.</p>
+
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Google Gemini API Key</label>
+          <input type="password" x-model="settingsKeys.google"
+                 placeholder="From aistudio.google.com"
+                 class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200
+                        placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition">
+          <a href="https://aistudio.google.com/apikey" target="_blank" class="text-xs text-slate-600 hover:text-slate-400 mt-0.5 inline-block">Get a key &rarr;</a>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Phoenix API Key</label>
+          <input type="password" x-model="settingsKeys.phoenix"
+                 placeholder="From app.phoenix.arize.com"
+                 class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200
+                        placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition">
+          <a href="https://app.phoenix.arize.com" target="_blank" class="text-xs text-slate-600 hover:text-slate-400 mt-0.5 inline-block">Get a key &rarr;</a>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Phoenix Endpoint</label>
+          <input type="text" x-model="settingsKeys.phoenixEndpoint"
+                 placeholder="https://app.phoenix.arize.com/s/YOUR_WORKSPACE"
+                 class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200
+                        placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition">
+        </div>
+      </div>
+
+      <div class="flex gap-2 mt-5">
+        <button @click="saveKeys()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-sm px-4 py-2 rounded-lg transition">
+          Save
+        </button>
+        <button @click="showSettings = false" class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex h-[calc(100vh-65px)]">
+
+    <!-- Left Panel: PAER Steps + Eval Scores -->
+    <aside class="w-80 border-r border-slate-700 flex flex-col">
+
+      <!-- PAER Steps -->
+      <div class="p-4 border-b border-slate-700 flex-1 overflow-y-auto">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">PAER Pipeline</h2>
+        <template x-if="steps.length === 0">
+          <p class="text-xs text-slate-600 italic">Submit a query to start...</p>
+        </template>
+        <template x-for="step in steps" :key="step.id">
+          <div class="mb-2 fade-in">
+            <div class="flex items-center gap-2 p-2 rounded-lg"
+                 :class="{
+                   'bg-slate-800': step.status === 'pending',
+                   'bg-blue-900/30 border border-blue-700/50': step.status === 'running',
+                   'bg-emerald-900/30 border border-emerald-700/50': step.status === 'passed',
+                   'bg-red-900/30 border border-red-700/50': step.status === 'failed',
+                   'bg-amber-900/30 border border-amber-700/50': step.status === 'retrying',
+                 }">
+              <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                   :class="{
+                     'bg-slate-700 text-slate-400': step.status === 'pending',
+                     'bg-blue-600 text-white pulse': step.status === 'running',
+                     'bg-emerald-600 text-white': step.status === 'passed',
+                     'bg-red-600 text-white': step.status === 'failed',
+                     'bg-amber-600 text-white': step.status === 'retrying',
+                   }">
+                <span x-show="step.status === 'passed'">&#10003;</span>
+                <span x-show="step.status === 'failed'">&#10007;</span>
+                <span x-show="step.status === 'retrying'">&#8635;</span>
+                <span x-show="step.status === 'pending' || step.status === 'running'" x-text="step.id"></span>
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-medium text-slate-200 truncate" x-text="step.action || step.tool"></p>
+                <p class="text-xs text-slate-500" x-text="step.phase"></p>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Eval Scores -->
+      <div class="p-4 border-b border-slate-700">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Eval Scores</h2>
+        <template x-if="Object.keys(scores).length === 0">
+          <p class="text-xs text-slate-600 italic">No evaluations yet</p>
+        </template>
+        <template x-for="(val, key) in scores" :key="key">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs text-slate-400" x-text="key"></span>
+            <div class="flex items-center gap-2">
+              <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                <div class="h-full rounded-full transition-all duration-500"
+                     :class="val >= 0.7 ? 'bg-emerald-500' : val >= 0.4 ? 'bg-amber-500' : 'bg-red-500'"
+                     :style="`width: ${val * 100}%`"></div>
+              </div>
+              <span class="text-xs font-mono w-8 text-right"
+                    :class="val >= 0.7 ? 'text-emerald-400' : val >= 0.4 ? 'text-amber-400' : 'text-red-400'"
+                    x-text="val.toFixed(2)"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Calibration Override Counter -->
+      <div class="p-4 border-b border-slate-700" x-show="calibrationCount > 0" x-cloak>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-xs font-semibold text-red-400 uppercase tracking-wider">Judge Overrides</h2>
+          <span class="text-xs font-bold bg-red-600/30 text-red-300 px-2 py-0.5 rounded-full" x-text="calibrationCount"></span>
+        </div>
+        <template x-if="lastCalibration">
+          <div class="text-xs space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-slate-500">Last override</span>
+              <span class="font-mono">
+                <span class="text-red-400" x-text="lastCalibration.original_score.toFixed(2)"></span>
+                <span class="text-slate-600 mx-1">&rarr;</span>
+                <span class="text-amber-400" x-text="lastCalibration.calibrated_score.toFixed(2)"></span>
+              </span>
+            </div>
+            <p class="text-slate-600 italic truncate" x-text="lastCalibration.reason"></p>
+          </div>
+        </template>
+      </div>
+
+      <!-- Self-Improvement -->
+      <div class="p-4 border-b border-slate-700">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Self-Improvement</h2>
+        <button @click="runImprove()"
+                :disabled="improving"
+                class="w-full text-xs bg-violet-600/20 border border-violet-700/50 text-violet-300
+                       hover:bg-violet-600/30 disabled:opacity-50 px-3 py-2 rounded-lg transition mb-2">
+          <span x-show="!improving">Learn from history</span>
+          <span x-show="improving" class="pulse">Analyzing...</span>
+        </button>
+        <template x-if="improvementResult">
+          <div class="fade-in">
+            <template x-if="improvementResult.updated">
+              <div>
+                <p class="text-xs text-emerald-400 mb-1">Harness v<span x-text="improvementResult.version"></span></p>
+                <template x-for="r in (improvementResult.new_rules || [])" :key="r">
+                  <p class="text-xs text-slate-400 mb-0.5">+ <span x-text="r"></span></p>
+                </template>
+                <template x-for="p in (improvementResult.patterns || [])" :key="p.metric">
+                  <p class="text-xs text-red-400/70 mb-0.5">
+                    <span x-text="p.metric.replace('cruicible_','')"></span>: <span x-text="p.count"></span> fails
+                  </p>
+                </template>
+              </div>
+            </template>
+            <template x-if="!improvementResult.updated">
+              <p class="text-xs text-slate-500" x-text="improvementResult.reason"></p>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Before/After Experiment -->
+      <div class="p-4 border-b border-slate-700">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Before / After</h2>
+
+        <template x-if="experimentResult && experimentResult.ran">
+          <div class="fade-in mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-center flex-1">
+                <p class="text-lg font-bold" :class="experimentResult.baseline_pass_rate >= 50 ? 'text-amber-400' : 'text-red-400'"
+                   x-text="experimentResult.baseline_pass_rate + '%'"></p>
+                <p class="text-xs text-slate-500">Baseline</p>
+              </div>
+              <div class="text-center px-2">
+                <span class="text-slate-600">&rarr;</span>
+              </div>
+              <div class="text-center flex-1">
+                <p class="text-lg font-bold text-emerald-400"
+                   x-text="experimentResult.improved_pass_rate + '%'"></p>
+                <p class="text-xs text-slate-500">Improved</p>
+              </div>
+            </div>
+            <div class="text-center">
+              <span class="text-xs font-bold px-2 py-0.5 rounded"
+                    :class="experimentResult.delta > 0 ? 'bg-emerald-900/50 text-emerald-300' : 'bg-red-900/50 text-red-300'"
+                    x-text="(experimentResult.delta > 0 ? '+' : '') + experimentResult.delta + '% pass rate'"></span>
+            </div>
+            <div class="mt-2 text-center">
+              <span class="text-xs font-mono text-slate-500"
+                    x-text="'avg score: ' + experimentResult.baseline_avg_score + ' → ' + experimentResult.improved_avg_score"></span>
+            </div>
+            <p class="text-xs text-slate-600 mt-1 text-center"
+               x-text="experimentResult.queries_used + ' queries, real Google Search'"></p>
+          </div>
+        </template>
+
+        <template x-if="experimentRunning">
+          <div class="mb-3">
+            <div class="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden mb-1">
+              <div class="h-full bg-violet-500 rounded-full transition-all duration-300"
+                   :style="`width: ${experimentTotalSteps ? (experimentProgress / experimentTotalSteps * 100) : 0}%`"></div>
+            </div>
+            <p class="text-xs text-slate-500 pulse" x-text="experimentMessage"></p>
+          </div>
+        </template>
+
+        <button @click="runExperiment()"
+                :disabled="experimentRunning"
+                class="w-full text-xs bg-violet-600/20 border border-violet-700/50 text-violet-300
+                       hover:bg-violet-600/30 disabled:opacity-50 px-3 py-2 rounded-lg transition">
+          <span x-show="!experimentRunning">Run Experiment</span>
+          <span x-show="experimentRunning" class="pulse">Running...</span>
+        </button>
+      </div>
+
+      <!-- Briefs & Re-verify (K1) -->
+      <div class="p-4 border-b border-slate-700" x-show="Object.keys(savedBriefs).length > 0" x-cloak>
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Saved Briefs</h2>
+        <template x-for="(brief, bid) in savedBriefs" :key="bid">
+          <div class="mb-2 p-2 bg-slate-800 rounded-lg">
+            <p class="text-xs text-slate-300 truncate" x-text="brief.query"></p>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs px-1.5 py-0.5 rounded"
+                    :class="{
+                      'bg-amber-900/40 text-amber-300': brief.status === 'pending_review',
+                      'bg-emerald-900/40 text-emerald-300': brief.status === 'approved',
+                      'bg-red-900/40 text-red-300': brief.status === 'rejected',
+                    }"
+                    x-text="brief.status"></span>
+              <button @click="startReverify(bid)"
+                      :disabled="reverifyRunning"
+                      class="text-xs text-cyan-400 hover:text-cyan-300 disabled:opacity-50">
+                Re-verify
+              </button>
+            </div>
+            <template x-if="brief.reverify_results && brief.reverify_results.length > 0">
+              <div class="mt-2 space-y-1">
+                <template x-for="(r, ri) in brief.reverify_results" :key="ri">
+                  <div class="flex items-start gap-1.5 text-xs">
+                    <span class="shrink-0 mt-0.5 w-2 h-2 rounded-full"
+                          :class="{
+                            'bg-emerald-500': r.verdict === 'CONFIRMED',
+                            'bg-amber-500': r.verdict === 'OUTDATED',
+                            'bg-red-500': r.verdict === 'UNCONFIRMED',
+                            'bg-slate-500': r.verdict === 'ERROR',
+                          }"></span>
+                    <span class="text-slate-400 leading-tight" x-text="r.claim"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <template x-if="reverifyRunning">
+          <div class="mt-2">
+            <div class="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden mb-1">
+              <div class="h-full bg-cyan-500 rounded-full transition-all duration-300"
+                   :style="`width: ${reverifyTotal ? (reverifyProgress / reverifyTotal * 100) : 0}%`"></div>
+            </div>
+            <p class="text-xs text-slate-500 pulse" x-text="reverifyMessage"></p>
+          </div>
+        </template>
+      </div>
+
+      <!-- Links -->
+      <div class="p-4 space-y-2">
+        <a href="/wiki" target="_blank"
+           class="flex items-center gap-2 text-xs text-emerald-500 hover:text-emerald-300 transition">
+          <span>CruicibleWiki</span>
+          <span>&rarr;</span>
+        </a>
+        <a href="https://app.phoenix.arize.com" target="_blank"
+           class="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition">
+          <span>View in Phoenix</span>
+          <span>&rarr;</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- Main: Chat -->
+    <main class="flex-1 flex flex-col">
+      <div class="flex-1 overflow-y-auto p-6 space-y-4" id="chat">
+        <template x-for="(msg, i) in messages" :key="i">
+          <div class="fade-in" :class="msg.role === 'user' ? 'flex justify-end' : ''">
+            <template x-if="msg.type === 'calibration'">
+              <div class="max-w-2xl calibration-slam calibration-glow rounded-xl border-2 border-red-500/60 bg-gradient-to-br from-red-950/60 to-slate-900 px-5 py-4">
+                <div class="flex items-center gap-3 mb-3">
+                  <div class="w-10 h-10 rounded-lg bg-red-600/30 flex items-center justify-center shrink-0">
+                    <span class="text-red-400 text-lg font-black">!</span>
+                  </div>
+                  <div>
+                    <p class="text-sm font-bold text-red-400 uppercase tracking-wider">Calibration Override</p>
+                    <p class="text-xs text-red-300/60" x-text="msg.calibration.type === 'zero_citations' ? 'Zero-Citation Detection' : 'Score Disagreement Detection'"></p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-4 mb-3">
+                  <div class="text-center flex-1 py-2 rounded-lg bg-red-900/30">
+                    <p class="text-xs text-slate-500 mb-0.5">Judge claimed</p>
+                    <p class="text-xl font-bold text-red-400" x-text="msg.calibration.original_score.toFixed(2)"></p>
+                  </div>
+                  <div class="text-red-500 text-lg font-bold">&rarr;</div>
+                  <div class="text-center flex-1 py-2 rounded-lg bg-slate-800/80">
+                    <p class="text-xs text-slate-500 mb-0.5">Calibrated to</p>
+                    <p class="text-xl font-bold text-amber-400" x-text="msg.calibration.calibrated_score.toFixed(2)"></p>
+                  </div>
+                </div>
+                <div class="space-y-1.5 text-xs">
+                  <p class="text-red-300/80"><span class="text-slate-500">Code evidence:</span> <span x-text="msg.calibration.code_evidence"></span></p>
+                  <p class="text-red-300/80"><span class="text-slate-500">Judge claim:</span> <span x-text="msg.calibration.judge_claim"></span></p>
+                  <p class="text-slate-400 italic" x-text="msg.calibration.reason"></p>
+                </div>
+              </div>
+            </template>
+            <template x-if="msg.type !== 'calibration'">
+            <div class="rounded-xl px-4 py-3"
+                 :class="{
+                   'max-w-2xl bg-blue-600/20 border border-blue-700/50': msg.role === 'user',
+                   'max-w-2xl bg-slate-800/50 border border-slate-700': msg.type === 'tool',
+                   'max-w-3xl bg-gradient-to-br from-emerald-900/30 to-slate-800 border border-emerald-700/40': msg.type === 'brief',
+                   'max-w-2xl bg-slate-800': msg.type !== 'tool' && msg.type !== 'brief' && msg.role !== 'user',
+                 }">
+              <template x-if="msg.type === 'tool'">
+                <div>
+                  <span class="text-xs font-mono text-slate-500" x-text="'⚡ ' + msg.tool"></span>
+                  <pre class="text-xs text-slate-400 mt-1 max-h-32 overflow-y-auto" x-text="msg.text"></pre>
+                </div>
+              </template>
+              <template x-if="msg.type === 'brief'">
+                <div>
+                  <span class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2 block">Research Brief</span>
+                  <div class="text-sm text-slate-200 prose prose-invert prose-sm max-w-none"
+                       x-html="renderMarkdown(msg.text)"></div>
+                </div>
+              </template>
+              <template x-if="msg.type !== 'tool' && msg.type !== 'brief'">
+                <div class="text-sm text-slate-200 prose prose-invert prose-sm max-w-none"
+                     x-html="renderMarkdown(msg.text)"></div>
+              </template>
+            </div>
+            </template>
+          </div>
+        </template>
+        <div x-show="status === 'running'" class="flex gap-1 items-center text-slate-500 text-sm">
+          <span class="pulse">Thinking</span>
+          <span class="pulse" style="animation-delay: 0.2s">.</span>
+          <span class="pulse" style="animation-delay: 0.4s">.</span>
+          <span class="pulse" style="animation-delay: 0.6s">.</span>
+        </div>
+
+        <!-- Human Gate (K2) -->
+        <div x-show="status === 'pending_review'" class="fade-in max-w-2xl">
+          <div class="rounded-xl border-2 border-amber-500/50 bg-amber-950/30 px-5 py-4">
+            <div class="flex items-center gap-3 mb-3">
+              <div class="w-8 h-8 rounded-lg bg-amber-600/30 flex items-center justify-center shrink-0">
+                <span class="text-amber-400 text-sm font-bold">?</span>
+              </div>
+              <div>
+                <p class="text-sm font-semibold text-amber-300">Human Review Required</p>
+                <p class="text-xs text-amber-400/60">The agent has completed research. Review and approve before publishing.</p>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="approveSession()"
+                      class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-sm px-4 py-2 rounded-lg transition font-medium">
+                Approve Brief
+              </button>
+              <button @click="rejectSession()"
+                      class="px-4 py-2 text-sm text-red-400 hover:text-red-300 border border-red-700/50 rounded-lg transition">
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input -->
+      <div class="border-t border-slate-700 p-4">
+        <form @submit.prevent="submit" class="flex gap-3">
+          <input type="text" x-model="query"
+                 :disabled="status === 'running'"
+                 placeholder="Ask Cruicible to research something..."
+                 class="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-sm
+                        text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500
+                        disabled:opacity-50 transition">
+          <button type="submit"
+                  :disabled="status === 'running' || !query.trim()"
+                  class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500
+                         text-white px-6 py-3 rounded-xl text-sm font-medium transition">
+            Research
+          </button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    function cruicible() {
+      return {
+        query: '',
+        status: 'idle',
+        messages: [],
+        steps: [],
+        scores: {},
+        sessionId: null,
+        stepCounter: 0,
+        improving: false,
+        improvementResult: null,
+        experimentResult: null,
+        experimentRunning: false,
+        experimentProgress: 0,
+        experimentTotalSteps: 0,
+        experimentMessage: '',
+        showSettings: false,
+        settingsKeys: { google: '', phoenix: '', phoenixEndpoint: '' },
+        hasKeys: false,
+        calibrationCount: 0,
+        lastCalibration: null,
+        savedBriefs: {},
+        reverifyRunning: false,
+        reverifyProgress: 0,
+        reverifyTotal: 0,
+        reverifyMessage: '',
+
+        init() {
+          const saved = localStorage.getItem('cruicible_keys');
+          if (saved) {
+            try {
+              const k = JSON.parse(saved);
+              this.settingsKeys = k;
+              this.hasKeys = !!(k.google);
+            } catch (e) {}
+          }
+          if (!this.hasKeys) { this.showSettings = true; }
+        },
+
+        saveKeys() {
+          localStorage.setItem('cruicible_keys', JSON.stringify(this.settingsKeys));
+          this.hasKeys = !!(this.settingsKeys.google);
+          this.showSettings = false;
+        },
+
+        apiHeaders() {
+          const h = { 'Content-Type': 'application/json' };
+          if (this.settingsKeys.google) h['X-Google-Key'] = this.settingsKeys.google;
+          if (this.settingsKeys.phoenix) h['X-Phoenix-Key'] = this.settingsKeys.phoenix;
+          if (this.settingsKeys.phoenixEndpoint) h['X-Phoenix-Endpoint'] = this.settingsKeys.phoenixEndpoint;
+          return h;
+        },
+
+        async submit() {
+          if (!this.query.trim() || this.status === 'running') return;
+
+          const q = this.query.trim();
+          this.query = '';
+          this.messages = [{ role: 'user', type: 'text', text: q }];
+          this.steps = [];
+          this.scores = {};
+          this.status = 'running';
+          this.stepCounter = 0;
+          this.calibrationCount = 0;
+          this.lastCalibration = null;
+
+          try {
+            const res = await fetch('/api/research', {
+              method: 'POST',
+              headers: this.apiHeaders(),
+              body: JSON.stringify({ query: q }),
+            });
+            const data = await res.json();
+            this.sessionId = data.session_id;
+            this.listenSSE(data.session_id);
+          } catch (e) {
+            this.status = 'error';
+            this.messages.push({ role: 'system', type: 'text', text: 'Failed to start research: ' + e.message });
+          }
+        },
+
+        listenSSE(sessionId) {
+          const source = new EventSource(`/api/stream/${sessionId}`);
+
+          source.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+
+            if (data.type === 'done') {
+              this.status = 'pending_review';
+              this.loadBriefs();
+              source.close();
+              return;
+            }
+
+            if (data.type === 'error') {
+              this.status = 'error';
+              this.messages.push({ role: 'system', type: 'text', text: data.message });
+              source.close();
+              return;
+            }
+
+            if (data.type === 'tool_call') {
+              for (const tool of (data.tools || [])) {
+                this.handleToolCall(tool);
+              }
+            }
+
+            if (data.type === 'tool_response') {
+              for (const resp of (data.responses || [])) {
+                this.handleToolResponse(resp);
+              }
+            }
+
+            if (data.type === 'text' && data.text) {
+              const author = data.author || 'agent';
+              const isFinal = author === 'cruicible' || author === 'agent';
+              this.messages.push({ role: 'agent', type: isFinal ? 'brief' : 'text', text: data.text });
+            }
+
+            this.$nextTick(() => {
+              const chat = document.getElementById('chat');
+              if (chat) chat.scrollTop = chat.scrollHeight;
+            });
+          };
+
+          source.onerror = () => {
+            if (this.status === 'running') {
+              this.status = 'error';
+            }
+            source.close();
+          };
+        },
+
+        handleToolCall(tool) {
+          const name = tool.name;
+          this.messages.push({
+            role: 'agent', type: 'tool',
+            tool: name,
+            text: JSON.stringify(tool.args, null, 2).slice(0, 500),
+          });
+
+          if (name === 'plan_research') {
+            this.addStep('plan', 'Planning research...', 'running');
+          } else if (name === 'google_search') {
+            this.addStep('search', 'Searching...', 'running');
+          } else if (name === 'draft_section') {
+            this.addStep('draft', 'Drafting section...', 'running');
+          } else if (name === 'self_evaluate') {
+            this.addStep('evaluate', 'Evaluating quality...', 'running');
+          } else if (name === 'replan_step') {
+            if (this.steps.length > 0) {
+              this.steps[this.steps.length - 1].status = 'failed';
+            }
+            this.addStep('replan', 'Replanning...', 'retrying');
+          } else           if (name === 'save_pattern') {
+            this.addStep('save', 'Saving pattern...', 'running');
+            const brief = tool.args?.final_brief;
+            if (brief && brief.length > 50) {
+              this.messages.push({ role: 'agent', type: 'brief', text: brief });
+            }
+          }
+        },
+
+        handleToolResponse(resp) {
+          const name = resp.name;
+
+          if (name === 'self_evaluate') {
+            try {
+              const evalData = JSON.parse(resp.response);
+              if (evalData.scores) {
+                this.scores = { ...this.scores, ...evalData.scores };
+              }
+              const lastEvalStep = [...this.steps].reverse().find(s => s.phase === 'evaluate');
+              if (lastEvalStep) {
+                lastEvalStep.status = evalData.passed ? 'passed' : 'failed';
+              }
+
+              if (evalData.calibration_event && evalData.calibration_event.triggered) {
+                this.calibrationCount++;
+                this.lastCalibration = evalData.calibration_event;
+                this.messages.push({
+                  role: 'system', type: 'calibration',
+                  calibration: evalData.calibration_event,
+                });
+              }
+            } catch (e) {
+              console.warn('self_evaluate parse failed:', e, resp.response?.slice(0, 200));
+            }
+          }
+
+          if (name === 'plan_research') {
+            const lastPlan = [...this.steps].reverse().find(s => s.phase === 'plan');
+            if (lastPlan) lastPlan.status = 'passed';
+          }
+
+          if (name === 'draft_section') {
+            const lastDraft = [...this.steps].reverse().find(s => s.phase === 'draft');
+            if (lastDraft) lastDraft.status = 'passed';
+          }
+
+          if (name === 'save_pattern') {
+            const lastSave = [...this.steps].reverse().find(s => s.phase === 'save');
+            if (lastSave) lastSave.status = 'passed';
+          }
+        },
+
+        addStep(phase, action, status) {
+          this.stepCounter++;
+          this.steps.push({
+            id: this.stepCounter,
+            phase,
+            action,
+            tool: phase,
+            status,
+          });
+        },
+
+        async runImprove() {
+          this.improving = true;
+          this.improvementResult = null;
+          try {
+            const res = await fetch('/api/improve', { method: 'POST', headers: this.apiHeaders() });
+            this.improvementResult = await res.json();
+          } catch (e) {
+            this.improvementResult = { updated: false, reason: e.message };
+          }
+          this.improving = false;
+        },
+
+        async runExperiment() {
+          this.experimentRunning = true;
+          this.experimentResult = null;
+          this.experimentProgress = 0;
+          this.experimentTotalSteps = 0;
+          this.experimentMessage = 'Starting experiment...';
+
+          try {
+            const res = await fetch('/api/experiment', {
+              method: 'POST',
+              headers: this.apiHeaders(),
+              body: JSON.stringify({}),
+            });
+            const { experiment_id } = await res.json();
+
+            const poll = setInterval(async () => {
+              try {
+                const statusRes = await fetch(`/api/experiment/${experiment_id}`);
+                const statusData = await statusRes.json();
+                this.experimentProgress = statusData.progress;
+                this.experimentTotalSteps = statusData.total_steps;
+                this.experimentMessage = statusData.message;
+
+                if (statusData.status === 'complete') {
+                  clearInterval(poll);
+                  this.experimentResult = statusData.result;
+                  this.experimentRunning = false;
+                }
+              } catch (e) {
+                console.warn('Poll failed:', e);
+              }
+            }, 2000);
+          } catch (e) {
+            this.experimentRunning = false;
+            this.experimentMessage = 'Failed: ' + e.message;
+          }
+        },
+
+        async approveSession() {
+          if (!this.sessionId) return;
+          try {
+            await fetch(`/api/approve/${this.sessionId}`, { method: 'POST', headers: this.apiHeaders() });
+            this.status = 'complete';
+            if (this.savedBriefs[this.sessionId]) {
+              this.savedBriefs[this.sessionId].status = 'approved';
+            }
+          } catch (e) { console.warn('Approve failed:', e); }
+        },
+
+        async rejectSession() {
+          if (!this.sessionId) return;
+          try {
+            await fetch(`/api/reject/${this.sessionId}`, { method: 'POST', headers: this.apiHeaders() });
+            this.status = 'rejected';
+            if (this.savedBriefs[this.sessionId]) {
+              this.savedBriefs[this.sessionId].status = 'rejected';
+            }
+          } catch (e) { console.warn('Reject failed:', e); }
+        },
+
+        async loadBriefs() {
+          try {
+            const res = await fetch('/api/briefs');
+            const list = await res.json();
+            const map = {};
+            for (const b of list) { map[b.id] = b; }
+            this.savedBriefs = map;
+          } catch (e) { console.warn('Load briefs failed:', e); }
+        },
+
+        async startReverify(briefId) {
+          this.reverifyRunning = true;
+          this.reverifyProgress = 0;
+          this.reverifyTotal = 0;
+          this.reverifyMessage = 'Starting re-verification...';
+
+          try {
+            const res = await fetch(`/api/reverify/${briefId}`, {
+              method: 'POST',
+              headers: this.apiHeaders(),
+            });
+            const { job_id } = await res.json();
+
+            const poll = setInterval(async () => {
+              try {
+                const sr = await fetch(`/api/reverify-status/${job_id}`);
+                const sd = await sr.json();
+                this.reverifyProgress = sd.progress;
+                this.reverifyTotal = sd.total;
+                this.reverifyMessage = sd.message;
+
+                if (sd.status === 'complete') {
+                  clearInterval(poll);
+                  this.reverifyRunning = false;
+                  if (sd.results && this.savedBriefs[briefId]) {
+                    this.savedBriefs[briefId].reverify_results = sd.results;
+                  }
+                }
+              } catch (e) { console.warn('Reverify poll failed:', e); }
+            }, 2000);
+          } catch (e) {
+            this.reverifyRunning = false;
+            this.reverifyMessage = 'Failed: ' + e.message;
+          }
+        },
+
+        renderMarkdown(text) {
+          if (!text) return '';
+          return text
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code class="bg-slate-700 px-1 rounded text-xs">$1</code>')
+            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" class="text-emerald-400 underline">$1</a>')
+            .replace(/\n/g, '<br>');
+        },
+      };
+    }
+  </script>
+</body>
+</html>

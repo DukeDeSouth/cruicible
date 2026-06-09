@@ -82,17 +82,25 @@ def _log_to_phoenix(step_id: int, scores: dict, passed: bool, explanation: str) 
             return
 
         from phoenix.client import Client
+        from cruicible.tracing_setup import get_current_span_id
 
-        client = Client(endpoint=endpoint, headers={"api_key": api_key})
+        span_id = get_current_span_id()
+        if not span_id:
+            logger.debug("No active span — skipping Phoenix annotations")
+            return
+
+        client = Client(base_url=endpoint, api_key=api_key)
+        code_metrics = {"source_references", "specificity", "judge_calibrated"}
 
         for metric_name, score_val in scores.items():
             label = "pass" if score_val >= PASS_THRESHOLD else "fail"
             try:
-                client.annotations.add_annotation(
+                client.spans.add_span_annotation(
+                    span_id=span_id,
                     annotation_name=f"cruicible_{metric_name}",
-                    annotator_kind="LLM",
+                    annotator_kind="CODE" if metric_name in code_metrics else "LLM",
                     label=label,
-                    score=score_val,
+                    score=float(score_val),
                     explanation=f"Step {step_id}: {explanation}",
                 )
             except Exception:
@@ -101,6 +109,58 @@ def _log_to_phoenix(step_id: int, scores: dict, passed: bool, explanation: str) 
         logger.info("Eval annotations logged to Phoenix for step %d", step_id)
     except Exception as e:
         logger.debug("Phoenix annotation skipped: %s", e)
+
+
+def _calibrate(scores: dict) -> dict | None:
+    """Detect when LLM-judge disagrees with code-eval — judge self-attribution bias.
+
+    Triggers on two conditions:
+    1. Zero-ref override: code finds 0 citations but judge claims high faithfulness
+    2. Disagreement override: code-eval avg and LLM-judge avg diverge by > 0.4
+    """
+    code_refs = scores.get("source_references", 1.0)
+    code_spec = scores.get("specificity", 1.0)
+    judge_faith = scores.get("faithfulness", 0.0)
+    judge_comp = scores.get("completeness", 0.0)
+
+    code_avg = (code_refs + code_spec) / 2
+    judge_avg = (judge_faith + judge_comp) / 2
+
+    event = None
+
+    if code_refs <= 0.3 and judge_faith >= 0.7:
+        original = judge_faith
+        calibrated = min(judge_faith, 0.3)
+        scores["faithfulness"] = calibrated
+        scores["judge_calibrated"] = 1.0
+        event = {
+            "triggered": True,
+            "type": "zero_citations",
+            "metric": "faithfulness",
+            "original_score": round(original, 2),
+            "calibrated_score": round(calibrated, 2),
+            "code_evidence": f"source_references={code_refs:.2f} (code found {'zero' if code_refs == 0 else 'near-zero'} real citations)",
+            "judge_claim": f"faithfulness={original:.2f}",
+            "reason": "Judge hallucinated source support — code evaluator found no backing evidence.",
+        }
+    elif judge_avg > code_avg + 0.4 and judge_avg >= 0.6:
+        penalty = round((judge_avg - code_avg) * 0.5, 2)
+        original_faith = judge_faith
+        calibrated_faith = max(judge_faith - penalty, 0.0)
+        scores["faithfulness"] = round(calibrated_faith, 2)
+        scores["judge_calibrated"] = round(penalty, 2)
+        event = {
+            "triggered": True,
+            "type": "disagreement",
+            "metric": "faithfulness",
+            "original_score": round(original_faith, 2),
+            "calibrated_score": round(calibrated_faith, 2),
+            "code_evidence": f"code_avg={code_avg:.2f} vs judge_avg={judge_avg:.2f} (gap={judge_avg - code_avg:.2f})",
+            "judge_claim": f"faithfulness={original_faith:.2f}, completeness={judge_comp:.2f}",
+            "reason": "Significant disagreement between code evaluators and LLM judge — applied calibration penalty.",
+        }
+
+    return event
 
 
 def self_evaluate(step_id: int, content: str, sources: list[str], query: str) -> dict:
@@ -160,11 +220,11 @@ Respond with JSON only: {{"score": <float>, "reason": "<brief explanation>"}}"""
         scores["faithfulness"] = 0.5
         explanations.append("Faithfulness check failed — defaulting to 0.5")
 
-    # 4. LLM-as-judge: completeness
+    # 4. LLM-as-judge: completeness (evaluated per-step, not full query)
     comp_prompt = f"""You are a strict research quality judge. Evaluate whether the DRAFT
-adequately covers ALL aspects of the research task.
+adequately covers the specific task assigned to THIS SECTION (not the entire research project).
 
-TASK: {query}
+THIS SECTION'S TASK: {query}
 DRAFT:
 {content}
 
@@ -188,17 +248,30 @@ Respond with JSON only: {{"score": <float>, "reason": "<brief explanation>"}}"""
         scores["completeness"] = 0.5
         explanations.append("Completeness check failed — defaulting to 0.5")
 
-    avg_score = sum(scores.values()) / len(scores)
+    calib_event = _calibrate(scores)
+    if calib_event:
+        explanations.append(f"CALIBRATION OVERRIDE: {calib_event['reason']}")
+
+    avg_score = sum(v for k, v in scores.items() if k != "judge_calibrated") / max(
+        sum(1 for k in scores if k != "judge_calibrated"), 1
+    )
     passed = avg_score >= PASS_THRESHOLD and scores["source_references"] > 0
 
     explanation = "; ".join(explanations) if explanations else "All checks passed"
 
     _log_to_phoenix(step_id, scores, passed, explanation)
 
-    return {
+    short_explanation = explanation[:300] + "..." if len(explanation) > 300 else explanation
+
+    result = {
         "passed": passed,
         "scores": scores,
         "avg_score": round(avg_score, 3),
-        "explanation": explanation,
+        "explanation": short_explanation,
         "step_id": step_id,
     }
+
+    if calib_event:
+        result["calibration_event"] = calib_event
+
+    return result

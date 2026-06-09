@@ -9,12 +9,15 @@ from google import genai
 logger = logging.getLogger(__name__)
 
 _client = None
+_client_key = None
 
 
 def get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY", ""))
+    global _client, _client_key
+    current_key = os.environ.get("GOOGLE_API_KEY", "")
+    if _client is None or _client_key != current_key:
+        _client = genai.Client(api_key=current_key)
+        _client_key = current_key
     return _client
 
 
