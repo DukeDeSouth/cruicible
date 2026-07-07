@@ -40,6 +40,11 @@ def _apply_keys(request: Request):
     if pe:
         os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = pe
 
+
+def _request_google_key(request: Request) -> str:
+    """Return the Google API key supplied by the client for this request."""
+    return (request.headers.get("x-google-key") or "").strip()
+
 session_service = InMemorySessionService()
 
 sessions: dict[str, dict] = {}
@@ -94,6 +99,44 @@ async def wiki_page():
     return HTMLResponse(html_path.read_text())
 
 
+def _google_api_key() -> str:
+    return os.environ.get("GOOGLE_API_KEY", "").strip()
+
+
+def _session_has_work(state: dict) -> bool:
+    return any(
+        ev.get("type") in ("tool_call", "tool_response", "text")
+        for ev in state.get("events", [])
+    )
+
+
+def _finalize_session(session_id: str):
+    """Set terminal session status and emit a single done event."""
+    state = sessions.get(session_id)
+    if not state:
+        return
+
+    _capture_brief(session_id)
+    has_error = any(ev.get("type") == "error" for ev in state["events"])
+    has_brief = session_id in briefs_store
+
+    if has_error:
+        state["status"] = "error"
+    elif has_brief or _session_has_work(state):
+        state["status"] = "pending_review"
+    else:
+        state["status"] = "error"
+        state["events"].append({
+            "type": "error",
+            "message": (
+                "Agent finished without producing a research brief. "
+                "Check your Google API key in Settings."
+            ),
+        })
+
+    state["events"].append({"type": "done", "status": state["status"]})
+
+
 @app.post("/api/research")
 async def start_research(request: Request):
     _apply_keys(request)
@@ -101,6 +144,12 @@ async def start_research(request: Request):
     query = body.get("query", "").strip()
     if not query:
         return JSONResponse({"error": "query is required"}, status_code=400)
+
+    if not _request_google_key(request):
+        return JSONResponse(
+            {"error": "Google API key is required. Open Settings and add your Gemini key."},
+            status_code=400,
+        )
 
     session_id = str(uuid.uuid4())[:8]
     session = await session_service.create_session(
@@ -167,8 +216,10 @@ async def _run_agent(session_id: str, query: str):
                 logger.warning("Event serialization error (skipped): %s", inner_err)
     except Exception as e:
         err_str = str(e)
-        if "was created in a different Context" in err_str:
-            logger.debug("OTel context cleanup (non-fatal): %s", e)
+        if "was created in a different Context" in err_str and _session_has_work(sessions[session_id]):
+            logger.warning(
+                "OTel context cleanup after successful run (non-fatal): %s", e
+            )
         else:
             logger.error("Agent error in session %s: %s", session_id, e)
             sessions[session_id]["events"].append({
@@ -176,9 +227,7 @@ async def _run_agent(session_id: str, query: str):
                 "message": err_str,
             })
     finally:
-        _capture_brief(session_id)
-        sessions[session_id]["events"].append({"type": "done"})
-        sessions[session_id]["status"] = "pending_review"
+        _finalize_session(session_id)
 
 
 def _capture_brief(session_id: str):
@@ -286,6 +335,7 @@ async def stream_events(session_id: str):
 
     async def generate():
         sent = 0
+        last_ping = time.time()
         while True:
             state = sessions.get(session_id)
             if not state:
@@ -296,12 +346,41 @@ async def stream_events(session_id: str):
                 yield f"data: {json.dumps(events[sent])}\n\n"
                 sent += 1
 
-            if state["status"] in ("complete", "pending_review", "rejected"):
+            if state["status"] in ("complete", "pending_review", "rejected", "error"):
                 break
+
+            now = time.time()
+            if now - last_ping >= 15:
+                yield ": keepalive\n\n"
+                last_ping = now
 
             await asyncio.sleep(0.3)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/events/{session_id}")
+async def get_events(session_id: str, offset: int = 0):
+    """Poll-based event delivery fallback when SSE disconnects."""
+    state = sessions.get(session_id)
+    if not state:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    events = state["events"]
+    safe_offset = max(0, min(offset, len(events)))
+    return {
+        "session_id": session_id,
+        "status": state["status"],
+        "events": events[safe_offset:],
+        "total": len(events),
+    }
 
 
 @app.get("/api/status/{session_id}")

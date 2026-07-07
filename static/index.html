@@ -426,6 +426,9 @@
                 <p class="text-xs text-amber-400/60">The agent has completed research. Review and approve before publishing.</p>
               </div>
             </div>
+            <p x-show="steps.length === 0" class="text-xs text-red-400 mb-3">
+              No research output was captured. Check your API keys in Settings and try again.
+            </p>
             <div class="flex gap-2">
               <button @click="approveSession()"
                       class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-sm px-4 py-2 rounded-lg transition font-medium">
@@ -469,6 +472,8 @@
         steps: [],
         scores: {},
         sessionId: null,
+        eventOffset: 0,
+        pollTimer: null,
         stepCounter: 0,
         improving: false,
         improvementResult: null,
@@ -516,6 +521,14 @@
 
         async submit() {
           if (!this.query.trim() || this.status === 'running') return;
+          if (!this.hasKeys) {
+            this.showSettings = true;
+            this.messages.push({
+              role: 'system', type: 'text',
+              text: 'Add your Google Gemini API key in Settings before starting research.',
+            });
+            return;
+          }
 
           const q = this.query.trim();
           this.query = '';
@@ -526,6 +539,11 @@
           this.stepCounter = 0;
           this.calibrationCount = 0;
           this.lastCalibration = null;
+          this.eventOffset = 0;
+          if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
+          }
 
           try {
             const res = await fetch('/api/research', {
@@ -534,6 +552,14 @@
               body: JSON.stringify({ query: q }),
             });
             const data = await res.json();
+            if (!res.ok) {
+              this.status = 'error';
+              this.messages.push({
+                role: 'system', type: 'text',
+                text: data.error || 'Failed to start research.',
+              });
+              return;
+            }
             this.sessionId = data.session_id;
             this.listenSSE(data.session_id);
           } catch (e) {
@@ -542,56 +568,86 @@
           }
         },
 
+        handleEvent(data) {
+          if (data.type === 'error') {
+            this.status = 'error';
+            this.messages.push({ role: 'system', type: 'text', text: data.message });
+            return;
+          }
+
+          if (data.type === 'done') {
+            if (data.status === 'error' || this.status === 'error') {
+              this.status = 'error';
+              return;
+            }
+            this.status = 'pending_review';
+            this.loadBriefs();
+            return;
+          }
+
+          if (data.type === 'tool_call') {
+            for (const tool of (data.tools || [])) {
+              this.handleToolCall(tool);
+            }
+          }
+
+          if (data.type === 'tool_response') {
+            for (const resp of (data.responses || [])) {
+              this.handleToolResponse(resp);
+            }
+          }
+
+          if (data.type === 'text' && data.text) {
+            const author = data.author || 'agent';
+            const isFinal = author === 'cruicible' || author === 'agent';
+            this.messages.push({ role: 'agent', type: isFinal ? 'brief' : 'text', text: data.text });
+          }
+
+          this.$nextTick(() => {
+            const chat = document.getElementById('chat');
+            if (chat) chat.scrollTop = chat.scrollHeight;
+          });
+        },
+
         listenSSE(sessionId) {
           const source = new EventSource(`/api/stream/${sessionId}`);
 
           source.onmessage = (e) => {
             const data = JSON.parse(e.data);
+            this.handleEvent(data);
 
             if (data.type === 'done') {
-              this.status = 'pending_review';
-              this.loadBriefs();
               source.close();
-              return;
             }
-
-            if (data.type === 'error') {
-              this.status = 'error';
-              this.messages.push({ role: 'system', type: 'text', text: data.message });
-              source.close();
-              return;
-            }
-
-            if (data.type === 'tool_call') {
-              for (const tool of (data.tools || [])) {
-                this.handleToolCall(tool);
-              }
-            }
-
-            if (data.type === 'tool_response') {
-              for (const resp of (data.responses || [])) {
-                this.handleToolResponse(resp);
-              }
-            }
-
-            if (data.type === 'text' && data.text) {
-              const author = data.author || 'agent';
-              const isFinal = author === 'cruicible' || author === 'agent';
-              this.messages.push({ role: 'agent', type: isFinal ? 'brief' : 'text', text: data.text });
-            }
-
-            this.$nextTick(() => {
-              const chat = document.getElementById('chat');
-              if (chat) chat.scrollTop = chat.scrollHeight;
-            });
           };
 
           source.onerror = () => {
-            if (this.status === 'running') {
-              this.status = 'error';
-            }
             source.close();
+            if (this.status === 'running') {
+              this.startPolling(sessionId);
+            }
           };
+        },
+
+        startPolling(sessionId) {
+          if (this.pollTimer) return;
+          this.pollTimer = setInterval(async () => {
+            try {
+              const res = await fetch(`/api/events/${sessionId}?offset=${this.eventOffset}`);
+              if (!res.ok) return;
+              const data = await res.json();
+              for (const ev of data.events) {
+                this.handleEvent(ev);
+                this.eventOffset += 1;
+              }
+              if (['pending_review', 'complete', 'rejected', 'error'].includes(data.status)) {
+                clearInterval(this.pollTimer);
+                this.pollTimer = null;
+              }
+            } catch (e) {
+              console.warn('Poll failed:', e);
+            }
+          }, 2000);
         },
 
         handleToolCall(tool) {
@@ -604,7 +660,7 @@
 
           if (name === 'plan_research') {
             this.addStep('plan', 'Planning research...', 'running');
-          } else if (name === 'google_search') {
+          } else if (name === 'google_search' || name === 'google_search_agent') {
             this.addStep('search', 'Searching...', 'running');
           } else if (name === 'draft_section') {
             this.addStep('draft', 'Drafting section...', 'running');
